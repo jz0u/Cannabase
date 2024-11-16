@@ -59,5 +59,7 @@ dist-ssr
 
 #env
 .env
+.env.local
+.env.*.local
 #node modules
 node_modules
