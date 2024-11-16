@@ -14,18 +14,24 @@ import java.util.Optional;
 
 @Service
 public class StrainService {
+    private final ValidationService validationService;
+    private final AuditService auditService;
     private final StrainRepository strainRepository;
     private final StrainTypeRepository strainTypeRepository;
     private final StrainMapper strainMapper;
     
     public StrainService(
-        StrainRepository strainRepository, 
+        StrainRepository strainRepository,
         StrainTypeRepository strainTypeRepository,
-        StrainMapper strainMapper
+        StrainMapper strainMapper,
+        ValidationService validationService,
+        AuditService auditService
     ) {
         this.strainRepository = strainRepository;
         this.strainTypeRepository = strainTypeRepository;
         this.strainMapper = strainMapper;
+        this.validationService = validationService;
+        this.auditService = auditService;
     }
     
     public List<Strain> getAllStrains() {
@@ -46,10 +52,24 @@ public class StrainService {
     
     @Transactional
     public Strain createStrain(StrainRequestDto dto) {
+        // Validate data
+        validationService.validateStrainData(dto.getName(), dto.getThcContent(), dto.getCbdContent());
+        
+        // Create strain
         validateStrainName(dto.getName());
         StrainType type = findStrainType(dto.getType());
         Strain strain = strainMapper.toEntity(dto, type);
-        return strainRepository.save(strain);
+        Strain savedStrain = strainRepository.save(strain);
+
+        // Log the event
+        auditService.logEvent(
+            "CREATE",
+            "Strain",
+            savedStrain.getId(),
+            String.format("Created strain: %s of type: %s", savedStrain.getName(), type.getName())
+        );
+
+        return savedStrain;
     }
     
     @Transactional
