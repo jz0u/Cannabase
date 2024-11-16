@@ -4,174 +4,207 @@ import com.cannabase.models.Strain;
 import com.cannabase.models.StrainType;
 import com.cannabase.repositories.StrainRepository;
 import com.cannabase.repositories.StrainTypeRepository;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
-import org.springframework.http.*;
+import org.springframework.transaction.annotation.Transactional;
 import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import java.math.BigDecimal;
+import java.util.HashMap;
+import java.util.Map;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
-import java.math.BigDecimal;
-import java.util.ArrayList;
-import java.util.List;
+import org.springframework.http.ResponseEntity;
+import org.springframework.http.HttpHeaders;
+import org.springframework.http.HttpEntity;
+import org.springframework.http.MediaType;
 
 @Service
 public class KushyApiLoader {
     private static final Logger logger = LoggerFactory.getLogger(KushyApiLoader.class);
-    private static final String API_BASE_URL = "http://api.kushy.net/api/1.1/tables";
-    
-    private final RestTemplate restTemplate;
-    private final StrainRepository strainRepository;
-    private final StrainTypeRepository strainTypeRepository;
-    private final ObjectMapper objectMapper;
+    private static final String KUSHY_API_URL = "http://api.kushy.net/api/1.1/tables/strains/rows";
 
-    public KushyApiLoader(StrainRepository strainRepository, 
-                         StrainTypeRepository strainTypeRepository) {
-        this.restTemplate = new RestTemplate();
-        this.strainRepository = strainRepository;
-        this.strainTypeRepository = strainTypeRepository;
-        this.objectMapper = new ObjectMapper();
-    }
+    @Autowired
+    private StrainRepository strainRepository;
 
-    public void loadStrains() {
+    @Autowired
+    private StrainTypeRepository strainTypeRepository;
+
+    @Autowired
+    private RestTemplate restTemplate;
+
+    private final Map<String, StrainType> strainTypeCache = new HashMap<>();
+
+    @Transactional
+    public void loadStrainData() {
         try {
-            logger.info("Starting strain data import from Kushy API");
+            logger.info("Starting strain data load from Kushy API");
             
-            // Get strains data
-            ResponseEntity<String> response = restTemplate.getForEntity(
-                API_BASE_URL + "/strains/rows",
-                String.class
-            );
-
-            JsonNode root = objectMapper.readTree(response.getBody());
-            JsonNode data = root.path("data");
-            
-            // Initialize strain types
+            // Initialize basic strain types
             initializeStrainTypes();
             
-            int processed = 0;
-            int total = data.size();
-            List<String> errors = new ArrayList<>();
+            // Set up headers
+            HttpHeaders headers = new HttpHeaders();
+            headers.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<String> entity = new HttpEntity<>(headers);
+            
+            // Fetch data from Kushy API
+            logger.info("Fetching data from Kushy API: {}", KUSHY_API_URL);
+            ResponseEntity<String> responseEntity = restTemplate.getForEntity(KUSHY_API_URL, String.class);
+            String response = responseEntity.getBody();
+            
+            if (response == null || response.isEmpty()) {
+                logger.error("Received empty response from Kushy API");
+                return;
+            }
+            
+            logger.info("Received response from Kushy API: {} characters", response.length());
+            logger.debug("Raw API response: {}", response);
+            
+            ObjectMapper mapper = new ObjectMapper();
+            JsonNode root = mapper.readTree(response);
+            JsonNode rows = root.get("data");
 
-            for (JsonNode strainData : data) {
+            if (rows == null || !rows.isArray()) {
+                logger.error("No data array found in API response. Response structure: {}", root.toString());
+                return;
+            }
+            
+            logger.info("Found {} strains in API response", rows.size());
+            int processed = 0;
+            int saved = 0;
+
+            for (JsonNode row : rows) {
                 try {
-                    processStrain(strainData);
                     processed++;
-                    
+                    if (processStrainData(row)) {
+                        saved++;
+                    }
                     if (processed % 10 == 0) {
-                        logger.info("Processed {}/{} strains", processed, total);
+                        logger.info("Processed {} strains, saved {}", processed, saved);
                     }
                 } catch (Exception e) {
-                    String name = strainData.path("name").asText("Unknown");
-                    String error = String.format("Error processing strain %s: %s", name, e.getMessage());
-                    errors.add(error);
-                    logger.error(error);
+                    logger.error("Error processing strain: " + row.toString(), e);
                 }
             }
 
-            // Log summary
-            logger.info("Import completed. Processed {}/{} strains", processed, total);
-            if (!errors.isEmpty()) {
-                logger.warn("Encountered {} errors during import:", errors.size());
-                errors.forEach(logger::warn);
-            }
-
+            logger.info("Completed strain data load. Processed: {}, Saved: {}", processed, saved);
+            logger.info("Final counts - Strains: {}, Types: {}", 
+                strainRepository.count(), strainTypeRepository.count());
         } catch (Exception e) {
-            logger.error("Error loading strains: {}", e.getMessage());
-            throw new RuntimeException("Failed to load strains", e);
+            logger.error("Error loading strain data", e);
+            throw new RuntimeException("Failed to load strain data", e);
         }
-    }
-
-    private void processStrain(JsonNode strainData) {
-        String name = strainData.path("name").asText();
-        
-        // Skip if strain already exists
-        if (strainRepository.findByNameIgnoreCase(name).isPresent()) {
-            logger.debug("Strain already exists: {}", name);
-            return;
-        }
-
-        Strain strain = new Strain();
-        strain.setName(name);
-        
-        // Build rich description
-        StringBuilder description = new StringBuilder();
-        description.append(strainData.path("description").asText(""));
-        
-        String breeder = strainData.path("breeder").asText();
-        if (breeder != null && !breeder.isEmpty()) {
-            description.append("\nBreeder: ").append(breeder);
-        }
-        
-        String effects = strainData.path("effects").asText();
-        if (effects != null && !effects.isEmpty()) {
-            description.append("\nEffects: ").append(effects);
-        }
-        
-        String ailment = strainData.path("ailment").asText();
-        if (ailment != null && !ailment.isEmpty()) {
-            description.append("\nMedical Uses: ").append(ailment);
-        }
-        
-        String flavor = strainData.path("flavor").asText();
-        if (flavor != null && !flavor.isEmpty()) {
-            description.append("\nFlavor: ").append(flavor);
-        }
-        
-        String terpenes = strainData.path("terpenes").asText();
-        if (terpenes != null && !terpenes.isEmpty()) {
-            description.append("\nDominant Terpenes: ").append(terpenes);
-        }
-
-        strain.setDescription(description.toString());
-        
-        // Set type
-        String typeStr = strainData.path("type").asText("hybrid").toLowerCase();
-        StrainType type = strainTypeRepository.findByNameIgnoreCase(normalizeType(typeStr))
-            .orElseGet(() -> strainTypeRepository.findByNameIgnoreCase("hybrid").orElseThrow());
-        strain.setType(type);
-        
-        // Set cannabinoid content
-        // Convert from mg/g to percentage (divide by 10)
-        strain.setThcContent(extractCannabinoidContent(strainData, "thc"));
-        strain.setCbdContent(extractCannabinoidContent(strainData, "cbd"));
-
-        strainRepository.save(strain);
-        logger.debug("Saved strain: {}", name);
     }
 
     private void initializeStrainTypes() {
-        createStrainType("indica", "Known for relaxing and sedating effects, typically best for nighttime use");
-        createStrainType("sativa", "Known for energizing and uplifting effects, typically best for daytime use");
-        createStrainType("hybrid", "A balanced combination of Indica and Sativa properties");
+        logger.info("Initializing strain types");
+        createStrainType("Sativa", "Cannabis sativa is known for its energizing effects");
+        createStrainType("Indica", "Cannabis indica is known for its relaxing effects");
+        createStrainType("Hybrid", "A mix of Sativa and Indica");
+        logger.info("Strain types initialized. Count: {}", strainTypeRepository.count());
     }
 
     private void createStrainType(String name, String description) {
-        if (!strainTypeRepository.findByNameIgnoreCase(name).isPresent()) {
-            StrainType type = new StrainType();
-            type.setName(name);
-            type.setDescription(description);
-            strainTypeRepository.save(type);
-            logger.info("Created strain type: {}", name);
+        try {
+            StrainType type = strainTypeRepository.findByNameIgnoreCase(name)
+                .orElseGet(() -> {
+                    StrainType newType = new StrainType();
+                    newType.setName(name);
+                    newType.setDescription(description);
+                    return strainTypeRepository.save(newType);
+                });
+            strainTypeCache.put(name.toLowerCase(), type);
+            logger.info("Strain type processed: {}", name);
+        } catch (Exception e) {
+            logger.error("Error creating strain type: " + name, e);
         }
     }
 
-    private String normalizeType(String type) {
-        if (type == null || type.trim().isEmpty()) return "hybrid";
-        type = type.toLowerCase().trim();
-        if (type.contains("indica")) return "indica";
-        if (type.contains("sativa")) return "sativa";
-        return "hybrid";
+    private boolean processStrainData(JsonNode strainData) {
+        String name = strainData.path("name").asText();
+        if (name == null || name.isEmpty()) {
+            logger.warn("Skipping strain with empty name");
+            return false;
+        }
+
+        logger.debug("Processing strain: {}", name);
+
+        // Skip if strain already exists
+        if (strainRepository.existsByNameIgnoreCase(name)) {
+            logger.info("Strain already exists: {}", name);
+            return false;
+        }
+
+        try {
+            Strain strain = new Strain();
+            strain.setName(name);
+            
+            String description = strainData.path("description").asText();
+            strain.setDescription(description);
+            logger.debug("Description set: {}", description.substring(0, Math.min(50, description.length())));
+            
+            // Parse THC and CBD content
+            try {
+                String thcStr = strainData.path("thc").asText();
+                if (thcStr != null && !thcStr.isEmpty()) {
+                    String cleanThc = thcStr.replaceAll("[^0-9.]", "");
+                    if (!cleanThc.isEmpty()) {
+                        strain.setThcContent(new BigDecimal(cleanThc));
+                        logger.debug("THC content set: {}", cleanThc);
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Error parsing THC content for strain: {}", name, e);
+            }
+
+            try {
+                String cbdStr = strainData.path("cbd").asText();
+                if (cbdStr != null && !cbdStr.isEmpty()) {
+                    String cleanCbd = cbdStr.replaceAll("[^0-9.]", "");
+                    if (!cleanCbd.isEmpty()) {
+                        strain.setCbdContent(new BigDecimal(cleanCbd));
+                        logger.debug("CBD content set: {}", cleanCbd);
+                    }
+                }
+            } catch (Exception e) {
+                logger.warn("Error parsing CBD content for strain: {}", name, e);
+            }
+
+            // Set strain type
+            String typeStr = strainData.path("type").asText().toLowerCase();
+            logger.debug("Raw type string: {}", typeStr);
+            StrainType type = determineStrainType(typeStr);
+            if (type != null) {
+                strain.setType(type);
+                logger.debug("Type set: {}", type.getName());
+            } else {
+                logger.warn("Could not determine type for strain: {}", name);
+                return false;
+            }
+
+            Strain savedStrain = strainRepository.save(strain);
+            logger.info("Saved strain: {} with ID: {}", name, savedStrain.getId());
+            return true;
+        } catch (Exception e) {
+            logger.error("Error saving strain: {}", name, e);
+            return false;
+        }
     }
 
-    private BigDecimal extractCannabinoidContent(JsonNode strainData, String cannabinoid) {
-        try {
-            int content = strainData.path(cannabinoid).asInt(0);
-            // Convert from mg/g to percentage
-            return new BigDecimal(content).divide(new BigDecimal("10"));
-        } catch (Exception e) {
-            logger.warn("Could not extract {} content", cannabinoid);
-            return cannabinoid.equals("thc") ? new BigDecimal("18.00") : new BigDecimal("0.50");
+    private StrainType determineStrainType(String typeStr) {
+        if (typeStr == null || typeStr.isEmpty()) {
+            return strainTypeCache.get("hybrid"); // default to hybrid if type is unknown
+        }
+        
+        typeStr = typeStr.toLowerCase();
+        if (typeStr.contains("sativa")) {
+            return strainTypeCache.get("sativa");
+        } else if (typeStr.contains("indica")) {
+            return strainTypeCache.get("indica");
+        } else {
+            return strainTypeCache.get("hybrid");
         }
     }
 }

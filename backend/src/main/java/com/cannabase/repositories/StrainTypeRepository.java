@@ -7,6 +7,9 @@ import java.util.Optional;
 
 @Repository
 public interface StrainTypeRepository extends JpaRepository<StrainType, Long> {
+    Optional<StrainType> findByName(String name);
+    
     Optional<StrainType> findByNameIgnoreCase(String name);
+    
     boolean existsByNameIgnoreCase(String name);
 }

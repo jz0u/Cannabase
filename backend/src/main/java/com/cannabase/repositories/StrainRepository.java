@@ -10,15 +10,13 @@ import java.util.Optional;
 
 @Repository
 public interface StrainRepository extends JpaRepository<Strain, Long> {
-    Optional<Strain> findByNameIgnoreCase(String name);
+    Optional<Strain> findByName(String name);
     
     boolean existsByNameIgnoreCase(String name);
     
     @Query("SELECT s FROM Strain s WHERE LOWER(s.name) LIKE LOWER(CONCAT('%', :name, '%'))")
     List<Strain> searchByName(@Param("name") String name);
     
-    // Additional useful queries
-    List<Strain> findByTypeNameIgnoreCase(String typeName);
-    List<Strain> findByThcContentGreaterThan(double thcContent);
-    List<Strain> findByCbdContentGreaterThan(double cbdContent);
+    @Query("SELECT s FROM Strain s WHERE LOWER(s.type.name) = LOWER(:typeName)")
+    List<Strain> findByTypeNameIgnoreCase(@Param("typeName") String typeName);
 }
