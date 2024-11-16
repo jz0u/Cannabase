@@ -2,19 +2,20 @@ package com.cannabase.repositories;
 
 import com.cannabase.models.Strain;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Query;
-import org.springframework.data.repository.query.Param;
 import org.springframework.stereotype.Repository;
 import java.util.List;
-import java.util.Optional;
 
 @Repository
 public interface StrainRepository extends JpaRepository<Strain, Long> {
-    boolean existsByNameIgnoreCase(String name);
+    // Find strains by name (case-insensitive)
     List<Strain> findByNameContainingIgnoreCase(String name);
+    
+    // Find strains by type (case-insensitive)
     List<Strain> findByType_NameIgnoreCase(String typeName);
-    List<Strain> findByNameContainingIgnoreCaseAndType_NameIgnoreCase(String name, String typeName);
-    List<Strain> searchByName(String name);
-    List<Strain> findByTypeNameIgnoreCase(String typeName);
+    
+    // Check if strain exists by name (case-insensitive)
+    boolean existsByNameIgnoreCase(String name);
+    
+    // Count strains by type
     long countByType_Name(String typeName);
 }
