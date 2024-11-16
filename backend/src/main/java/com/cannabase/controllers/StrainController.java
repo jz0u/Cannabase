@@ -2,16 +2,19 @@ package com.cannabase.controllers;
 
 import com.cannabase.models.Strain;
 import com.cannabase.services.StrainService;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 import java.util.List;
+import java.util.Map;
+import java.util.HashMap;
 
 @RestController
 @RequestMapping("/api/v1/strains")
 public class StrainController {
-    
     private final StrainService strainService;
     
+    @Autowired
     public StrainController(StrainService strainService) {
         this.strainService = strainService;
     }
